@@ -1,9 +1,7 @@
 """
-Handles all LLM API interactions.
-Supports: demo mode (returns canned results), or live mode (calls real APIs).
-Add new API providers here as needed.
+API client abstraction for calling any LLM. Supports demo (mock) and live modes.
+Extensible for any provider (OpenAI, Azure, Claude, Ollama, etc).
 """
-
 import requests
 import yaml
 import os
@@ -19,22 +17,32 @@ class APIClient:
         self.api_key = os.getenv("AITESTSUITE_API_KEY", config.get("api_key", ""))
         self.endpoint = config.get("api_endpoint", "")
         self.headers = {"Authorization": f"Bearer {self.api_key}"}
+        self.default_model = config.get("model", "gpt-3.5-turbo")
 
-    def chat(self, prompt):
+    def chat(self, prompt, system=None, history=None):
         if self.mode == "demo":
-            return {"output": "This is a demo response.", "meta": {}}
+            # Demo output is "safe" for offline
+            return {"output": f"[DEMO MODE] {prompt}", "meta": {"demo": True}}
         elif self.provider == "openai":
+            messages = []
+            if system:
+                messages.append({"role": "system", "content": system})
+            if history:
+                for msg in history:
+                    messages.append(msg)
+            messages.append({"role": "user", "content": prompt})
             resp = requests.post(
                 self.endpoint,
                 headers=self.headers,
                 json={
-                    "model": "gpt-3.5-turbo",
-                    "messages": [{"role": "user", "content": prompt}],
+                    "model": self.default_model,
+                    "messages": messages,
                 },
-                timeout=15,
+                timeout=30,
             )
             resp.raise_for_status()
-            return resp.json()
+            data = resp.json()
+            output = data["choices"][0]["message"]["content"]
+            return {"output": output, "meta": {"provider": "openai"}}
         else:
             raise NotImplementedError(f"Provider '{self.provider}' not implemented.")
-
