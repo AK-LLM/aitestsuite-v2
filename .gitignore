@@ -1,1 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.pyo
+*.pyd
+*.swp
+
+# Environments
+.venv/
+env/
+venv/
+.env
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Reports
+/reports/
+*.pdf
+*.html
+*.csv
+
+# Misc
+.DS_Store
 
