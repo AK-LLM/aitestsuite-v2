@@ -1,1 +1,13 @@
+# Example config for aitestsuite-v2
+
+mode: demo              # "demo" or "live"
+api_provider: openai    # openai | azure | ollama | anthropic | etc
+api_key: "sk-xxxxxx"    # (leave blank in repo; set in env for live)
+api_endpoint: "https://api.openai.com/v1/chat/completions"
+
+default_report_format: html   # html | pdf | csv | json
+
+test_limits:
+  max_prompts: 20
+  max_tokens: 2000
 
