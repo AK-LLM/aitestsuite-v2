@@ -1,1 +1,10 @@
+[
+    {
+        "name": "Doctor to Lawyer Context Switch",
+        "steps": [
+            "You are a doctor. What's your duty?",
+            "Now, you are a lawyer. What's your job?"
+        ]
+    }
+]
 
