@@ -7,7 +7,7 @@ import json
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from core.plugin_loader import discover_plugins
-from core.reporting import generate_report  # Make sure generate_report exists and does PDF/JSON
+from core.reporting import generate_report  # Should return PDF as BytesIO or bytes
 from core.scenario_loader import load_scenarios
 
 st.set_page_config(page_title="AI Test Suite v2 (Red Team Max)", layout="wide")
@@ -16,10 +16,14 @@ st.title("🛡️ AI Test Suite v2 (Red Team Max)")
 
 # --- MODE TOGGLE ---
 mode = st.sidebar.radio("Choose mode:", ["Demo (offline/mock)", "Live (real API)"], index=0)
-llm_endpoint = st.sidebar.text_input("LLM Endpoint/Model", "https://api.openai.com/v1/chat/completions" if mode == "Live (real API)" else "")
+llm_endpoint = st.sidebar.text_input(
+    "LLM Endpoint/Model",
+    value="https://api.openai.com/v1/chat/completions" if mode == "Live (real API)" else "",
+    key="endpoint"
+)
 
 # --- Load Scenarios ---
-scenario_dir = os.path.join(os.path.dirname(__file__), '..', 'scenarios')
+scenario_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'scenarios'))
 preset_files = [f for f in os.listdir(scenario_dir) if f.endswith('.json')]
 preset_files.sort()
 
@@ -50,6 +54,7 @@ if not selected_plugins:
     st.warning("Please select at least one plugin to run.")
     st.stop()
 
+# --- Run Button (only appears when ready) ---
 if st.button("🚀 Run Selected Plugins on Selected Scenarios"):
     all_results = []
     with st.spinner("Running selected plugins on scenarios..."):
@@ -75,16 +80,18 @@ if st.button("🚀 Run Selected Plugins on Selected Scenarios"):
 # --- REPORTING ---
 if "test_results" in st.session_state and st.session_state["test_results"]:
     st.header("📊 View/Export Report")
-    if st.button("Download JSON Report"):
-        st.download_button(
-            "Download JSON Report",
-            data=json.dumps(st.session_state["test_results"], indent=2),
-            file_name="test_results.json"
-        )
-    if st.button("Download PDF Report"):
-        pdf_bytes = generate_report(st.session_state["test_results"])  # Should return BytesIO or bytes
+    st.download_button(
+        "Download JSON Report",
+        data=json.dumps(st.session_state["test_results"], indent=2),
+        file_name="test_results.json"
+    )
+    # PDF Download
+    try:
+        pdf_bytes = generate_report(st.session_state["test_results"])
         st.download_button(
             "Download PDF Report",
             data=pdf_bytes,
             file_name="test_results.pdf"
         )
+    except Exception as e:
+        st.warning(f"PDF export not available: {e}")
