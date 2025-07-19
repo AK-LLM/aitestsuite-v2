@@ -1,133 +1,100 @@
-import io
+import os
+import json
+from datetime import datetime
 from reportlab.lib.pagesizes import letter
-from reportlab.lib import colors
-from reportlab.platypus import (
-    SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle
-)
-from reportlab.lib.styles import getSampleStyleSheet
-import matplotlib.pyplot as plt
-import pandas as pd
+from reportlab.pdfgen import canvas
 
-# Industry benchmarks
-INDUSTRY_METRICS = {
-    "High Risk":    {"threshold": 0, "standard": "OWASP-LLM-1 / NIST-AIRM-3.1"},
-    "Medium Risk":  {"threshold": 2, "standard": "OWASP-LLM-2 / NIST-AIRM-5.4"},
-    "Low Risk":     {"threshold": 10, "standard": "OWASP-LLM-3 / ISO-23894-5.2.3"},
-}
+# You may want to further modularize for more metrics/benchmarks
 
-# Risk Matrix legend
-RISK_MATRIX = [
-    {"level": "High Risk",   "definition": "Critical, must fix",    "example": "Jailbreak, PII leak",    "action": "Immediate"},
-    {"level": "Medium Risk", "definition": "Action needed",         "example": "Prompt confusion",       "action": "Review soon"},
-    {"level": "Low Risk",    "definition": "Acceptable, monitor",   "example": "Minor typo",            "action": "Log"},
-    {"level": "Unknown",     "definition": "Needs manual review",   "example": "Unclassifiable output", "action": "Investigate"},
-]
+def benchmark_result(plugin, result):
+    # Example: basic check, can be extended with more logic
+    critical = result.get("status", "").lower() in ["fail", "critical", "vulnerable"]
+    recommendations = []
+    if critical:
+        recommendations.append("Immediate remediation recommended. See plugin docs.")
+    else:
+        recommendations.append("No critical issues found. Continue to monitor and test regularly.")
+    # Add more industry standards/benchmarks as needed
+    return critical, recommendations
 
-def create_pdf_report(results):
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=letter)
-    styles = getSampleStyleSheet()
-    elements = []
+def summarize_results(results):
+    summary = {
+        "total_tests": len(results),
+        "critical_issues": 0,
+        "passed": 0,
+        "failed": 0,
+        "details": [],
+    }
+    for plugin, result in results.items():
+        critical, recommendations = benchmark_result(plugin, result)
+        status = result.get("status", "").lower()
+        if status in ["pass", "ok"]:
+            summary["passed"] += 1
+        else:
+            summary["failed"] += 1
+        if critical:
+            summary["critical_issues"] += 1
+        summary["details"].append({
+            "plugin": plugin,
+            "status": status,
+            "details": result.get("details", ""),
+            "recommendations": recommendations
+        })
+    return summary
 
-    # 1) Title & Summary
-    elements.append(Paragraph("AI Test Suite v2 — Comprehensive Report", styles['Title']))
-    elements.append(Spacer(1, 12))
-    total_scenarios = len(results)
-    total_tests = sum(len(item['results']) for item in results)
-    summary = (
-        f"<b>Total scenarios tested:</b> {total_scenarios}<br/>"
-        f"<b>Total plugin executions:</b> {total_tests}"
-    )
-    elements.append(Paragraph(summary, styles['Normal']))
-    elements.append(Spacer(1, 12))
+def save_json_report(summary, output_path):
+    with open(output_path, "w") as f:
+        json.dump(summary, f, indent=2)
 
-    # 2) Flatten into DataFrame for charts and tables
-    records = []
-    for scenario in results:
-        sid = scenario.get('scenario', {}).get('scenario_id', 'N/A')
-        for entry in scenario['results']:
-            plugin = entry['plugin']
-            res = entry['result']
-            rl = res.get('risk_level', 'Unknown')
-            records.append({'scenario': sid, 'plugin': plugin, 'risk': rl})
-    df = pd.DataFrame(records)
-    risk_counts = df['risk'].value_counts()
+def save_pdf_report(summary, output_path):
+    c = canvas.Canvas(output_path, pagesize=letter)
+    width, height = letter
+    line_height = 18
+    x_margin = 40
+    y = height - 40
 
-    # 3) Risk Distribution Chart
-    plt.figure(figsize=(4,2))
-    risk_counts.plot(kind='bar', color=['red','orange','green','gray'])
-    plt.title("Risk Level Distribution")
-    plt.ylabel("Count")
-    plt.tight_layout()
-    img_buffer = io.BytesIO()
-    plt.savefig(img_buffer, format='PNG')
-    plt.close()
-    img_buffer.seek(0)
-    elements.append(Image(img_buffer, width=400, height=200))
-    elements.append(Spacer(1, 12))
+    c.setFont("Helvetica-Bold", 18)
+    c.drawString(x_margin, y, "AI Test Suite Report")
+    y -= 2 * line_height
 
-    # 4) Industry Benchmark Table
-    bench_data = [["Risk Level","Your Count","Threshold","Standard","Status"]]
-    for level, info in INDUSTRY_METRICS.items():
-        count = int(risk_counts.get(level, 0))
-        thresh = info['threshold']
-        status = "❌" if count > thresh else "✅"
-        bench_data.append([level, count, thresh, info['standard'], status])
-    bench_tbl = Table(bench_data, colWidths=[100,60,60,160,40])
-    bench_tbl.setStyle(TableStyle([
-        ('BACKGROUND',(0,0),(-1,0),colors.lightgrey),
-        ('GRID',(0,0),(-1,-1),0.5,colors.black),
-        ('ALIGN',(1,1),(-1,-1),'CENTER'),
-    ]))
-    elements.append(Paragraph("Industry Benchmark Cross-Check", styles['Heading3']))
-    elements.append(bench_tbl)
-    elements.append(Spacer(1, 12))
+    c.setFont("Helvetica", 12)
+    c.drawString(x_margin, y, f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    y -= line_height
+    c.drawString(x_margin, y, f"Total Tests: {summary['total_tests']}")
+    y -= line_height
+    c.drawString(x_margin, y, f"Passed: {summary['passed']}  Failed: {summary['failed']}  Critical: {summary['critical_issues']}")
+    y -= 2 * line_height
 
-    # 5) Risk Matrix Legend
-    legend_data = [["Level","Definition","Example","Action"]]
-    for row in RISK_MATRIX:
-        legend_data.append([row['level'], row['definition'], row['example'], row['action']])
-    legend_tbl = Table(legend_data, colWidths=[100,120,140,80])
-    legend_tbl.setStyle(TableStyle([
-        ('BACKGROUND',(0,0),(-1,0),colors.darkgrey),
-        ('TEXTCOLOR',(0,0),(-1,0),colors.whitesmoke),
-        ('GRID',(0,0),(-1,-1),0.5,colors.black),
-        ('VALIGN',(0,0),(-1,-1),'TOP'),
-    ]))
-    elements.append(Paragraph("Risk Matrix Legend", styles['Heading3']))
-    elements.append(legend_tbl)
-    elements.append(Spacer(1, 12))
+    for detail in summary["details"]:
+        c.setFont("Helvetica-Bold", 12)
+        c.drawString(x_margin, y, f"Plugin: {detail['plugin']}   Status: {detail['status'].upper()}")
+        y -= line_height
+        c.setFont("Helvetica", 10)
+        c.drawString(x_margin + 10, y, f"Details: {detail['details']}")
+        y -= line_height
+        for rec in detail["recommendations"]:
+            c.drawString(x_margin + 10, y, f"Recommendation: {rec}")
+            y -= line_height
+        y -= line_height // 2
+        if y < 80:
+            c.showPage()
+            y = height - 40
+    c.save()
 
-    # 6) Root Cause Analysis (Plugin counts)
-    root_counts = df['plugin'].value_counts().reset_index().values.tolist()
-    root_data = [["Plugin","Issue Count"]] + root_counts
-    root_tbl = Table(root_data, colWidths=[200,80])
-    root_tbl.setStyle(TableStyle([('GRID',(0,0),(-1,-1),0.5,colors.black)]))
-    elements.append(Paragraph("Root Cause Analysis by Plugin", styles['Heading3']))
-    elements.append(root_tbl)
-    elements.append(Spacer(1, 12))
+def generate_full_report(results, output_dir="reports", base_filename="ai_test_report"):
+    os.makedirs(output_dir, exist_ok=True)
+    summary = summarize_results(results)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    json_path = os.path.join(output_dir, f"{base_filename}_{timestamp}.json")
+    pdf_path = os.path.join(output_dir, f"{base_filename}_{timestamp}.pdf")
+    save_json_report(summary, json_path)
+    save_pdf_report(summary, pdf_path)
+    return {"json": json_path, "pdf": pdf_path, "summary": summary}
 
-    # 7) Detailed Findings Table
-    detail_data = [["Scenario","Plugin","Risk","Issue","Recommendation"]]
-    for scenario in results:
-        sid = scenario.get('scenario', {}).get('scenario_id', 'N/A')
-        for entry in scenario['results']:
-            plugin = entry['plugin']
-            res = entry['result']
-            issue = res.get('issue','-')
-            rec = res.get('recommendation','-')
-            detail_data.append([sid, plugin, res.get('risk_level','-'), issue, rec])
-    detail_tbl = Table(detail_data, colWidths=[60,80,60,180,180])
-    detail_tbl.setStyle(TableStyle([
-        ('BACKGROUND',(0,0),(-1,0),colors.grey),
-        ('TEXTCOLOR',(0,0),(-1,0),colors.whitesmoke),
-        ('GRID',(0,0),(-1,-1),0.5,colors.black),
-        ('VALIGN',(0,1),(-1,-1),'TOP'),
-    ]))
-    elements.append(Paragraph("Detailed Findings", styles['Heading3']))
-    elements.append(detail_tbl)
-
-    # Build and return PDF
-    doc.build(elements)
-    buffer.seek(0)
-    return buffer
+# Example usage:
+# results = {
+#     "jailbreaks": {"status": "fail", "details": "Model was tricked by adversarial prompt"},
+#     "context_leak": {"status": "pass", "details": "No context leak detected"},
+# }
+# paths = generate_full_report(results)
+# print("Reports saved:", paths)
