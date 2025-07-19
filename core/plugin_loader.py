@@ -1,12 +1,3 @@
-# /core/plugin_loader.py
-"""
-Auto-discovers all plug-ins and test modules in /core and /plugins.
-Each plug-in/test must have:
-    - 'run' function (takes prompt/scenario, api_client, returns result dict)
-    - Metadata: 'name', 'description', 'category', 'risk', 'references'
-Loads into registry for UI/CLI/batch runners.
-"""
-
 import importlib.util
 import os
 
@@ -15,6 +6,9 @@ PLUGIN_FOLDERS = ["core", "plugins"]
 def discover_plugins():
     registry = []
     for folder in PLUGIN_FOLDERS:
+        if not os.path.isdir(folder):
+            print(f"[Plugin Loader] Folder missing: {folder}")
+            continue
         for fname in os.listdir(folder):
             if not fname.endswith(".py") or fname.startswith("_"):
                 continue
@@ -34,21 +28,10 @@ def discover_plugins():
                         "references": mod.METADATA.get("references", []),
                         "file": fname
                     })
+                else:
+                    print(f"[Plugin Loader] Skipped {fname} (missing METADATA or run)")
             except Exception as e:
-                print(f"Error loading plugin {fname}: {e}")
+                print(f"[Plugin Loader] Error loading plugin {fname}: {e}")
+    if not registry:
+        print("[Plugin Loader] No valid plugins found!")
     return registry
-
-# Example plug-in signature for /plugins/adv_prompt_chain.py:
-"""
-METADATA = {
-    "name": "Advanced Prompt Chain Injection",
-    "category": "Injection/Chaining",
-    "description": "Chained injections bypassing model context buffer.",
-    "risk": "Critical",
-    "references": ["OWASP LLM01", "OpenAI Evals", "Anthropic Jailbreaks"]
-}
-
-def run(scenario, api_client):
-    # Your chained attack logic here
-    pass
-"""
