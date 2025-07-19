@@ -3,66 +3,31 @@ import os
 import json
 import importlib.util
 from datetime import datetime
+import pandas as pd
+from core.generate_report import create_pdf_report
 
-# ---- CONFIG ----
 SCENARIO_FOLDER = "scenarios"
 PLUGIN_FOLDER = "plugins"
-REPORT_FOLDER = "reports"
 
 st.set_page_config(page_title="AI Test Suite v2 (Red Team Max)", layout="wide")
 st.markdown("# 🛡️ AI Test Suite v2 (Red Team Max)")
 
-# ---- SIDEBAR: Demo/Live Toggle and LLM Endpoint ----
-st.sidebar.title("⚡ Test Execution Mode")
-mode = st.sidebar.radio(
-    "Choose mode:",
-    ["Demo (offline/mock)", "Live (real API)"],
-    index=0
-)
-is_live = mode == "Live (real API)"
-llm_endpoint = st.sidebar.text_input(
-    "LLM Endpoint/Model",
-    value="https://api.openai.com/v1/chat/completions" if is_live else "",
-    help="Set your API endpoint here for live mode"
-)
-
-# ---- 1. SCENARIO LOADER (Preset + Custom Upload) ----
-st.markdown("## 🧪 Load Test Scenarios")
+# --- 1. SCENARIO LOADER ---
 preset_scenarios = [
     f for f in os.listdir(SCENARIO_FOLDER)
     if f.endswith(".json")
 ]
-selected_presets = st.multiselect(
-    "Select scenario(s) from built-in library:",
-    options=preset_scenarios,
-    help="Choose from JSON files in the /scenarios folder"
-)
-uploaded_files = st.file_uploader(
-    "Or upload custom scenario JSON(s)", type="json", accept_multiple_files=True
-)
+all_scenarios = []
+for scenario_file in preset_scenarios:
+    with open(os.path.join(SCENARIO_FOLDER, scenario_file), "r", encoding="utf-8") as f:
+        loaded = json.load(f)
+        if isinstance(loaded, list):
+            all_scenarios += loaded
+        else:
+            all_scenarios.append(loaded)
+scenario_names = [s.get("scenario_id", f"Scenario {i+1}") for i, s in enumerate(all_scenarios)]
 
-scenario_data = []
-# Load preset scenarios
-for scenario_file in selected_presets:
-    try:
-        with open(os.path.join(SCENARIO_FOLDER, scenario_file), "r", encoding="utf-8") as f:
-            scenario_data.append(json.load(f))
-    except Exception as e:
-        st.warning(f"Error loading {scenario_file}: {e}")
-
-# Load uploaded scenarios
-for uploaded_file in uploaded_files or []:
-    try:
-        scenario_data.append(json.load(uploaded_file))
-    except Exception as e:
-        st.warning(f"Error loading uploaded file: {e}")
-
-if not scenario_data:
-    st.info("No valid scenarios loaded yet.")
-else:
-    st.success(f"Loaded {len(scenario_data)} scenario(s) for testing.")
-
-# ---- 2. PLUGIN LOADER (Auto-import all plugins) ----
+# --- 2. PLUGIN LOADER ---
 def load_plugins(plugin_folder):
     plugins = {}
     for fname in os.listdir(plugin_folder):
@@ -75,86 +40,94 @@ def load_plugins(plugin_folder):
                 try:
                     spec.loader.exec_module(mod)
                     plugins[plugin_name] = mod
-                except Exception as e:
-                    st.warning(f"Error loading plugin {plugin_name}: {e}")
+                except Exception:
+                    pass
     return plugins
 
 plugins = load_plugins(PLUGIN_FOLDER)
+plugin_list = sorted(list(plugins.keys()))
 
-# ---- 3. PLUGIN MULTI-SELECT ----
-st.markdown("## 💼 Select Attack/Testing Plugins")
-all_plugin_names = sorted(list(plugins.keys()))
-selected_plugins = st.multiselect(
-    "Select plugins/tools to run (all by default):",
-    options=all_plugin_names,
-    default=all_plugin_names,
-    help="Auto-detected from /plugins"
+# --- 3. SELECTION ---
+st.sidebar.header("Test Selection")
+selected_scenarios_idx = st.sidebar.multiselect(
+    "Select Scenarios", options=list(range(len(scenario_names))),
+    format_func=lambda idx: scenario_names[idx], default=list(range(len(scenario_names)))
+)
+selected_plugins = st.sidebar.multiselect(
+    "Select Plugins", plugin_list, default=plugin_list
 )
 
-if not selected_plugins:
-    st.warning("No plugins selected.")
-else:
-    st.success(f"{len(selected_plugins)} plugins ready for testing.")
+# --- 4. RUN BUTTONS ---
+col1, col2 = st.columns(2)
+run_selected = col1.button("▶️ Run Selected")
+run_all = col2.button("🚀 RUN ALL TESTS")
 
-# ---- 4. RUN TESTS ----
-if st.button("🚀 RUN ALL TESTS/ATTACKS on ALL SCENARIOS", disabled=not scenario_data or not selected_plugins):
+# --- 5. RUN TESTS ---
+def run_tests(plugins_to_run, scenarios_to_run):
     results = []
-    with st.spinner("Running full test suite..."):
-        for scen_idx, scen in enumerate(scenario_data):
-            scen_results = {"scenario": scen, "results": []}
-            for plugin_name in selected_plugins:
-                plugin = plugins.get(plugin_name)
-                if plugin:
-                    try:
-                        # Assumes each plugin has a run() method taking scenario as input
-                        result = plugin.run(scen)
-                        scen_results["results"].append({
-                            "plugin": plugin_name,
-                            "result": result
-                        })
-                    except Exception as e:
-                        scen_results["results"].append({
-                            "plugin": plugin_name,
-                            "result": f"Error: {e}"
-                        })
-            results.append(scen_results)
-        st.success("All tests complete!")
+    for sidx in scenarios_to_run:
+        scenario = all_scenarios[sidx]
+        result_obj = {"scenario": scenario, "results": []}
+        for plugin_name in plugins_to_run:
+            plugin = plugins[plugin_name]
+            try:
+                res = plugin.run(scenario)
+                result_obj["results"].append({"plugin": plugin_name, "result": res})
+            except Exception as e:
+                result_obj["results"].append({"plugin": plugin_name, "result": {"risk_level": "Unknown", "issue": f"Plugin error: {e}", "recommendation": "Check plugin"}})
+        results.append(result_obj)
+    return results
+
+if run_all:
+    results = run_tests(plugin_list, list(range(len(all_scenarios))))
+    st.session_state["results"] = results
+    st.success("All tests complete!")
+elif run_selected:
+    if selected_plugins and selected_scenarios_idx:
+        results = run_tests(selected_plugins, selected_scenarios_idx)
         st.session_state["results"] = results
-        st.balloons()
+        st.success("Selected tests complete!")
+    else:
+        st.warning("Select at least one plugin and one scenario.")
 
-# ---- 5. REPORTING ----
-def save_report(results):
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    outpath = os.path.join(REPORT_FOLDER, f"ai_test_report_{ts}.json")
-    os.makedirs(REPORT_FOLDER, exist_ok=True)
-    with open(outpath, "w", encoding="utf-8") as f:
-        json.dump(results, f, indent=2)
-    return outpath
-
+# --- 6. REPORTING SECTION ---
 if "results" in st.session_state:
-    st.markdown("---\n### 📊 View/Export Report")
-    if st.button("💾 Download JSON Report"):
-        report_path = save_report(st.session_state["results"])
-        with open(report_path, "rb") as f:
-            st.download_button(
-                label="Download Full Report",
-                data=f,
-                file_name=os.path.basename(report_path),
-                mime="application/json"
-            )
+    st.header("📊 View/Export Report")
+    st.download_button(
+        "⬇️ Download JSON Report",
+        data=json.dumps(st.session_state["results"], indent=2),
+        file_name="results.json",
+        mime="application/json"
+    )
+    # PDF report
+    pdf_buf = create_pdf_report(st.session_state["results"])
+    st.download_button(
+        "⬇️ Download PDF Report",
+        data=pdf_buf,
+        file_name="AI_Test_Report.pdf",
+        mime="application/pdf"
+    )
+    # Quick stats
+    st.write(f"Total scenarios: {len(st.session_state['results'])}")
+    st.write(f"Total plugin tests: {sum(len(r['results']) for r in st.session_state['results'])}")
 
-    # Simple table view
-    for scen_idx, scen_result in enumerate(st.session_state["results"]):
-        st.markdown(f"#### Scenario {scen_idx + 1}")
-        for r in scen_result["results"]:
-            st.write(f"**Plugin:** {r['plugin']} | **Result:** {r['result']}")
+    # Optional: Show tabular output
+    flat = []
+    for sc in st.session_state["results"]:
+        sid = sc.get('scenario', {}).get('scenario_id', 'N/A')
+        for e in sc['results']:
+            flat.append({
+                "Scenario": sid,
+                "Plugin": e["plugin"],
+                "Risk": e["result"].get("risk_level", ""),
+                "Issue": e["result"].get("issue", ""),
+                "Recommendation": e["result"].get("recommendation", "")
+            })
+    if flat:
+        df = pd.DataFrame(flat)
+        st.dataframe(df)
+        if "Risk" in df.columns:
+            st.bar_chart(df["Risk"].value_counts())
 
-# ---- 6. HELP/FOOTER ----
-st.markdown("""
----
-#### 💡 Tips:
-- Place new JSON scenario files in `/scenarios` to expand your test library.
-- Add new plugins (.py) in `/plugins`—each should define a `run(scenario)` function.
-- Results are saved in `/reports`. You can extend reporting as needed!
-""")
+st.info("Select plugins and scenarios (left), then run. Download reports after test completion.")
 
