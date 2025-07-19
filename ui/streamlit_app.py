@@ -11,63 +11,105 @@ from core.reporting import generate_report, save_html
 st.set_page_config(page_title="AI Test Suite v2 (Red Team Max)", layout="wide")
 st.title("🛡️ AI Test Suite v2 (Red Team Max)")
 
-config = load_config()
-mode = st.sidebar.radio("Mode", ["demo", "live"])
-config["mode"] = mode
+# Defensive: global error hook
+import sys
+def global_exception_hook(exctype, value, traceback):
+    st.error(f"Unhandled Exception: {value}")
+    sys.__excepthook__(exctype, value, traceback)
+sys.excepthook = global_exception_hook
 
-# Endpoint/model selector
-endpoint = st.sidebar.text_input("LLM Endpoint/Model", config.get("api_endpoint", ""))
-if endpoint:
-    config["api_endpoint"] = endpoint
+try:
+    config = load_config()
+except Exception as e:
+    st.error(f"Error loading config: {e}")
+    config = {}
 
-api_client = APIClient(config)
-plugins = discover_plugins()
+try:
+    mode = st.sidebar.radio("Mode", ["demo", "live"], index=0)
+    config["mode"] = mode
+except Exception as e:
+    st.error(f"Sidebar mode error: {e}")
+    mode = "demo"
+    config["mode"] = mode
 
-# SCENARIO SOURCE
-scenario_source = st.radio("Test Source", ["Prebuilt", "Manual"])
+try:
+    endpoint = st.sidebar.text_input("LLM Endpoint/Model", config.get("api_endpoint", ""))
+    if endpoint:
+        config["api_endpoint"] = endpoint
+except Exception as e:
+    st.error(f"Sidebar endpoint error: {e}")
+
+try:
+    api_client = APIClient(config)
+except Exception as e:
+    st.error(f"APIClient init error: {e}")
+    api_client = None
+
+try:
+    plugins = discover_plugins()
+except Exception as e:
+    st.error(f"Plug-in discovery error: {e}")
+    plugins = []
+
+try:
+    scenario_source = st.radio("Test Source", ["Prebuilt", "Manual"])
+except Exception as e:
+    st.error(f"Scenario source selector error: {e}")
+    scenario_source = "Prebuilt"
+
 if scenario_source == "Prebuilt":
-    scenario_files = [f for f in os.listdir("scenarios") if f.endswith(".json")]
-    file = st.selectbox("Scenario file", scenario_files)
-    if st.button("Load Scenarios"):
-        scenarios = []
-        try:
-            path = os.path.join("scenarios", file)
-            scenarios = load_scenarios(path)
-            st.success(f"Loaded {len(scenarios)} scenarios from {file}.")
-        except Exception as e:
-            st.error(f"Error loading scenario file: {e}")
-        for idx, scenario in enumerate(scenarios):
-            st.markdown(f"#### Test {idx+1}: {scenario.get('name', '')}")
-            # Defensive: show missing fields
-            if "type" not in scenario:
-                st.error(f"Scenario missing 'type' field: {scenario}")
-                continue
-            ptype = scenario.get("type", "uncategorized")
-            # Defensive: match plugin by category (case-insensitive)
-            plugin = next((p for p in plugins if p["category"].lower() in ptype.lower()), None)
-            if plugin:
-                if st.button(f"Run {scenario.get('name', '')}"):
-                    try:
-                        result = plugin["module"].run(scenario, api_client, endpoint)
-                        st.json(result)
-                        html_report = generate_report([{
-                            "scenario": scenario,
-                            "plugin": plugin["name"],
-                            "result": result,
-                            "risk": plugin["risk"],
-                            "references": plugin["references"]
-                        }])
-                        if st.button(f"Export {scenario.get('name', '')} Report"):
-                            save_html(html_report, f"reports/{scenario.get('name', '')}.html")
-                            st.success(f"Saved to reports/{scenario.get('name', '')}.html")
-                    except Exception as e:
-                        st.error(f"Error running scenario: {e}")
-            else:
-                st.warning(
-                    f"No plug-in found for scenario type '{ptype}'. "
-                    f"Scenario: {scenario}\n\n"
-                    "Check your plug-in category matches your scenario 'type' field."
-                )
+    try:
+        scenario_files = [f for f in os.listdir("scenarios") if f.endswith(".json")]
+        file = st.selectbox("Scenario file", scenario_files)
+        if st.button("Load Scenarios"):
+            scenarios = []
+            try:
+                path = os.path.join("scenarios", file)
+                scenarios = load_scenarios(path)
+                st.success(f"Loaded {len(scenarios)} scenarios from {file}.")
+            except Exception as e:
+                st.error(f"Error loading scenario file: {e}")
+                scenarios = []
+            for idx, scenario in enumerate(scenarios):
+                st.markdown(f"#### Test {idx+1}: {scenario.get('name', '')}")
+                if "type" not in scenario:
+                    st.error(f"Scenario missing 'type' field: {scenario}")
+                    continue
+                ptype = scenario.get("type", "uncategorized")
+                plugin = next((p for p in plugins if p["category"].lower() in ptype.lower()), None)
+                if plugin:
+                    if st.button(f"Run {scenario.get('name', '')}"):
+                        try:
+                            if not api_client:
+                                st.error("API client not initialized.")
+                                continue
+                            result = plugin["module"].run(scenario, api_client, endpoint)
+                            st.json(result)
+                            html_report = generate_report([{
+                                "scenario": scenario,
+                                "plugin": plugin["name"],
+                                "result": result,
+                                "risk": plugin["risk"],
+                                "references": plugin["references"]
+                            }])
+                            if st.button(f"Export {scenario.get('name', '')} Report"):
+                                try:
+                                    os.makedirs("reports", exist_ok=True)
+                                    save_html(html_report, f"reports/{scenario.get('name', '')}.html")
+                                    st.success(f"Saved to reports/{scenario.get('name', '')}.html")
+                                except Exception as e:
+                                    st.error(f"Error saving HTML report: {e}")
+                        except Exception as e:
+                            st.error(f"Error running scenario: {e}")
+                else:
+                    st.warning(
+                        f"No plug-in found for scenario type '{ptype}'. "
+                        f"Scenario: {scenario}\n\n"
+                        "Check your plug-in category matches your scenario 'type' field."
+                    )
+    except Exception as e:
+        st.error(f"Error in prebuilt scenario UI: {e}")
+
 else:
     st.info("Paste single scenario (JSON/YAML, must have `prompt` or `steps` and `type` field).")
     manual = st.text_area("Manual scenario")
@@ -84,18 +126,25 @@ else:
                 ptype = scenario.get("type", "uncategorized")
                 plugin = next((p for p in plugins if p["category"].lower() in ptype.lower()), None)
                 if plugin:
-                    result = plugin["module"].run(scenario, api_client, endpoint)
-                    st.json(result)
-                    html_report = generate_report([{
-                        "scenario": scenario,
-                        "plugin": plugin["name"],
-                        "result": result,
-                        "risk": plugin["risk"],
-                        "references": plugin["references"]
-                    }])
-                    if st.button("Export Manual Scenario Report"):
-                        save_html(html_report, "reports/manual_scenario.html")
-                        st.success("Saved to reports/manual_scenario.html")
+                    if not api_client:
+                        st.error("API client not initialized.")
+                    else:
+                        result = plugin["module"].run(scenario, api_client, endpoint)
+                        st.json(result)
+                        html_report = generate_report([{
+                            "scenario": scenario,
+                            "plugin": plugin["name"],
+                            "result": result,
+                            "risk": plugin["risk"],
+                            "references": plugin["references"]
+                        }])
+                        if st.button("Export Manual Scenario Report"):
+                            try:
+                                os.makedirs("reports", exist_ok=True)
+                                save_html(html_report, "reports/manual_scenario.html")
+                                st.success("Saved to reports/manual_scenario.html")
+                            except Exception as e:
+                                st.error(f"Error saving HTML report: {e}")
                 else:
                     st.warning(
                         f"No plug-in found for type '{ptype}'. "
