@@ -1,112 +1,90 @@
+import streamlit as st
 import os
 import sys
 import json
-import streamlit as st
-import importlib
-from glob import glob
 
-# --- Fix Import Path for core and plugins (runs from project root) ---
+# --- ENSURE ROOT PATH ---
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from core.plugin_loader import load_plugins
-from core.reporting import generate_report_json, generate_report_pdf
-
-SCENARIO_FOLDER = os.path.join(os.path.dirname(__file__), '..', 'scenarios')
+from core.plugin_loader import discover_plugins
+from core.reporting import generate_report  # Make sure generate_report exists and does PDF/JSON
+from core.scenario_loader import load_scenarios
 
 st.set_page_config(page_title="AI Test Suite v2 (Red Team Max)", layout="wide")
+
 st.title("🛡️ AI Test Suite v2 (Red Team Max)")
 
-# --- Mode selection ---
-mode = st.sidebar.radio("Choose mode:", ["Demo (offline/mock)", "Live (real API)"])
-st.sidebar.write("LLM Endpoint/Model")
-if mode == "Live (real API)":
-    endpoint = st.sidebar.text_input("LLM Endpoint URL", value="https://api.openai.com/v1/chat/completions")
-    api_key = st.sidebar.text_input("API Key", type="password")
-else:
-    endpoint = None
-    api_key = None
+# --- MODE TOGGLE ---
+mode = st.sidebar.radio("Choose mode:", ["Demo (offline/mock)", "Live (real API)"], index=0)
+llm_endpoint = st.sidebar.text_input("LLM Endpoint/Model", "https://api.openai.com/v1/chat/completions" if mode == "Live (real API)" else "")
 
-# --- Load built-in scenarios for dropdown ---
-def get_built_in_scenarios():
-    if not os.path.exists(SCENARIO_FOLDER):
-        return []
-    json_files = glob(os.path.join(SCENARIO_FOLDER, "*.json"))
-    scenario_names = [os.path.basename(f) for f in json_files]
-    return scenario_names
+# --- Load Scenarios ---
+scenario_dir = os.path.join(os.path.dirname(__file__), '..', 'scenarios')
+preset_files = [f for f in os.listdir(scenario_dir) if f.endswith('.json')]
+preset_files.sort()
 
-st.subheader("🧪 Load Test Scenarios")
-scenario_list = get_built_in_scenarios()
-selected_scenarios = st.multiselect("Select scenario(s) from built-in library:", scenario_list)
+preset_choice = st.selectbox("Select scenario(s) from built-in library:", ["Choose options"] + preset_files)
 uploaded_files = st.file_uploader("Or upload custom scenario JSON(s)", type="json", accept_multiple_files=True)
 
-# --- Load scenario data ---
-scenario_data = []
-for scen in selected_scenarios:
-    with open(os.path.join(SCENARIO_FOLDER, scen), "r", encoding="utf-8") as f:
-        scenario_data.append(json.load(f))
-for uploaded in uploaded_files or []:
-    scenario_data.append(json.load(uploaded))
+loaded_scenarios = []
+if preset_choice and preset_choice != "Choose options":
+    with open(os.path.join(scenario_dir, preset_choice), 'r', encoding='utf-8') as f:
+        loaded_scenarios.append(json.load(f))
 
-if not scenario_data:
-    st.info("No valid scenarios loaded yet.")
+if uploaded_files:
+    for up in uploaded_files:
+        loaded_scenarios.append(json.load(up))
 
-# --- Plugins ---
-st.subheader("💼 Select Attack/Testing Plugins")
-plugins = load_plugins()
-plugin_names = list(plugins.keys())
+if not loaded_scenarios:
+    st.info("Please select or upload at least one test scenario.")
+    st.stop()
+
+# --- Load Plugins ---
+plugins = discover_plugins()
+plugin_names = [p["name"] for p in plugins]
 selected_plugins = st.multiselect(
-    "Select plugins/tools to run:",
-    plugin_names,
-    default=plugin_names
+    "Select plugins/tools to run (all by default):", plugin_names, default=plugin_names
 )
 
 if not selected_plugins:
     st.warning("Please select at least one plugin to run.")
+    st.stop()
 
-# --- Main Test Button ---
-run_tests = st.button("🚀 Run selected TESTS/ATTACKS on loaded SCENARIOS")
-test_results = []
-
-if run_tests and scenario_data and selected_plugins:
-    for scenario in scenario_data:
-        result = {}
-        for plugin_name in selected_plugins:
-            plugin = plugins[plugin_name]
-            # Each plugin is assumed to have a .run(scenario) method
-            try:
-                result[plugin_name] = plugin.run(scenario, mode=mode, endpoint=endpoint, api_key=api_key)
-            except Exception as e:
-                result[plugin_name] = {"error": str(e)}
-        test_results.append({
-            "scenario": scenario,
-            "results": result
-        })
+if st.button("🚀 Run Selected Plugins on Selected Scenarios"):
+    all_results = []
+    with st.spinner("Running selected plugins on scenarios..."):
+        for scenario in loaded_scenarios:
+            for plugin in plugins:
+                if plugin["name"] in selected_plugins:
+                    try:
+                        result = plugin["module"].run(scenario)
+                        all_results.append({
+                            "plugin": plugin["name"],
+                            "scenario": scenario.get("name", "Unnamed"),
+                            "result": result
+                        })
+                    except Exception as e:
+                        all_results.append({
+                            "plugin": plugin["name"],
+                            "scenario": scenario.get("name", "Unnamed"),
+                            "result": f"ERROR: {e}"
+                        })
     st.success("All tests complete!")
+    st.session_state["test_results"] = all_results
 
-    # --- Save to session state for reporting ---
-    st.session_state["results"] = test_results
-
-# --- Report Section ---
-st.subheader("📊 View/Export Report")
-
-if "results" in st.session_state:
-    # JSON Report
-    st.download_button(
-        label="⬇️ Download JSON Report",
-        data=json.dumps(st.session_state["results"], indent=2),
-        file_name="ai_test_suite_report.json",
-        mime="application/json"
-    )
-    # PDF Report
-    pdf_bytes = generate_report_pdf(st.session_state["results"])
-    st.download_button(
-        label="⬇️ Download PDF Report",
-        data=pdf_bytes,
-        file_name="ai_test_suite_report.pdf",
-        mime="application/pdf"
-    )
-
-# --- Helper Functions (core/reporting.py should have these) ---
-# generate_report_json(results): returns JSON serializable dict
-# generate_report_pdf(results): returns PDF as bytes
-
+# --- REPORTING ---
+if "test_results" in st.session_state and st.session_state["test_results"]:
+    st.header("📊 View/Export Report")
+    if st.button("Download JSON Report"):
+        st.download_button(
+            "Download JSON Report",
+            data=json.dumps(st.session_state["test_results"], indent=2),
+            file_name="test_results.json"
+        )
+    if st.button("Download PDF Report"):
+        pdf_bytes = generate_report(st.session_state["test_results"])  # Should return BytesIO or bytes
+        st.download_button(
+            "Download PDF Report",
+            data=pdf_bytes,
+            file_name="test_results.pdf"
+        )
