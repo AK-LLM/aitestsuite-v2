@@ -1,8 +1,13 @@
 streamlit
-pandas
-pyyaml
+matplotlib
+seaborn
+html2text
 reportlab
-openai
-requests
-pytest
-
+PyYAML
+pandas
+numpy
+# Optional: uncomment if you use openai API
+# openai
+# Optional: uncomment if you need cloud/azure/ollama, etc.
+# azure-ai-ml
+# ollama
