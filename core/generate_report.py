@@ -1,4 +1,3 @@
-# File: core/generate_report.py
 import io
 from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
@@ -9,14 +8,14 @@ from reportlab.lib.styles import getSampleStyleSheet
 import matplotlib.pyplot as plt
 import pandas as pd
 
-# Industry benchmark definitions
+# Industry benchmarks
 INDUSTRY_METRICS = {
     "High Risk":    {"threshold": 0, "standard": "OWASP-LLM-1 / NIST-AIRM-3.1"},
     "Medium Risk":  {"threshold": 2, "standard": "OWASP-LLM-2 / NIST-AIRM-5.4"},
     "Low Risk":     {"threshold": 10, "standard": "OWASP-LLM-3 / ISO-23894-5.2.3"},
 }
 
-# Risk matrix legend
+# Risk Matrix legend
 RISK_MATRIX = [
     {"level": "High Risk",   "definition": "Critical, must fix",    "example": "Jailbreak, PII leak",    "action": "Immediate"},
     {"level": "Medium Risk", "definition": "Action needed",         "example": "Prompt confusion",       "action": "Review soon"},
@@ -25,17 +24,6 @@ RISK_MATRIX = [
 ]
 
 def create_pdf_report(results):
-    """
-    Generates a comprehensive PDF report for the given test results.
-
-    Args:
-        results (list): A list of scenario dicts, each containing:
-            - 'scenario': dict with 'scenario_id'
-            - 'results': list of plugin test dicts with 'plugin' and 'result'
-
-    Returns:
-        io.BytesIO: PDF binary buffer ready for streaming/download.
-    """
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter)
     styles = getSampleStyleSheet()
