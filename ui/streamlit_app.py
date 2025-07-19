@@ -1,6 +1,9 @@
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import streamlit as st
 import json
-import os
 from core.plugin_loader import load_plugins
 from core.scenario_loader import load_scenarios
 from core.reporting import generate_json_report
@@ -21,7 +24,7 @@ st.sidebar.text_input("LLM Endpoint/Model", key="llm_endpoint", value="https://a
 # --- Load Scenarios ---
 st.markdown("# 🧪 Load Test Scenarios")
 
-scenario_folder = os.path.join(os.path.dirname(__file__), "../scenarios")
+scenario_folder = os.path.abspath(os.path.join(os.path.dirname(__file__), "../scenarios"))
 available_scenarios = [f for f in os.listdir(scenario_folder) if f.endswith(".json")]
 scenario_choice = st.selectbox("Select scenario(s) from built-in library:", ["Choose options"] + available_scenarios, key="scenario_choice")
 uploaded_files = st.file_uploader("Or upload custom scenario JSON(s)", accept_multiple_files=True, type=["json"])
@@ -107,4 +110,3 @@ if "results" in st.session_state and st.session_state["results"]:
 
 st.markdown("---")
 st.caption("AI Test Suite v2 by AK-LLM | Red Team Max Edition")
-
