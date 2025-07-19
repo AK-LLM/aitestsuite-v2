@@ -1,110 +1,110 @@
 import streamlit as st
-import os
 import json
-import importlib.util
-import pandas as pd
+import os
+from core.plugin_loader import load_plugins
+from core.scenario_loader import load_scenarios
+from core.reporting import generate_json_report
 from core.generate_report import create_pdf_report
 
-SCENARIO_FOLDER = "scenarios"
-PLUGIN_FOLDER = "plugins"
-
-st.set_page_config(page_title="AI Test Suite v2 (Red Team Max)", layout="wide")
-st.markdown("# 🛡️ AI Test Suite v2 (Red Team Max)")
-
-# === 1. SCENARIO LOADER ===
-preset_scenarios = [
-    f for f in os.listdir(SCENARIO_FOLDER)
-    if f.endswith(".json")
-]
-all_scenarios = []
-for scenario_file in preset_scenarios:
-    with open(os.path.join(SCENARIO_FOLDER, scenario_file), "r", encoding="utf-8") as f:
-        loaded = json.load(f)
-        if isinstance(loaded, list):
-            all_scenarios += loaded
-        else:
-            all_scenarios.append(loaded)
-scenario_names = [s.get("scenario_id", f"Scenario {i+1}") for i, s in enumerate(all_scenarios)]
-
-# === 2. PLUGIN LOADER ===
-def load_plugins(plugin_folder):
-    plugins = {}
-    for fname in os.listdir(plugin_folder):
-        if fname.endswith(".py") and fname != "__init__.py":
-            plugin_name = fname[:-3]
-            module_path = os.path.join(plugin_folder, fname)
-            spec = importlib.util.spec_from_file_location(plugin_name, module_path)
-            if spec and spec.loader:
-                mod = importlib.util.module_from_spec(spec)
-                try:
-                    spec.loader.exec_module(mod)
-                    plugins[plugin_name] = mod
-                except Exception:
-                    pass
-    return plugins
-
-plugins = load_plugins(PLUGIN_FOLDER)
-plugin_list = sorted(list(plugins.keys()))
-
-# === 3. SIDEBAR: MODE TOGGLE ===
-st.sidebar.header("Test Mode & Selection")
-mode = st.sidebar.radio("Mode", ["Demo/Offline", "Live/API"])
-
-api_endpoint = ""
-api_key = ""
-if mode == "Live/API":
-    api_endpoint = st.sidebar.text_input("API Endpoint URL", value="", help="Paste your LLM endpoint")
-    api_key = st.sidebar.text_input("API Key", value="", type="password", help="Paste your API key")
-
-selected_scenarios_idx = st.sidebar.multiselect(
-    "Select Scenarios", options=list(range(len(scenario_names))),
-    format_func=lambda idx: scenario_names[idx], default=list(range(len(scenario_names)))
-)
-selected_plugins = st.sidebar.multiselect(
-    "Select Plugins", plugin_list, default=plugin_list
+st.set_page_config(
+    page_title="AI Test Suite v2 (Red Team Max)",
+    page_icon=":shield:",
+    layout="wide"
 )
 
-# === 4. RUN BUTTONS ===
-col1, col2 = st.columns(2)
-run_selected = col1.button("▶️ Run Selected")
-run_all = col2.button("🚀 RUN ALL TESTS")
+# --- DEMO / LIVE Toggle ---
+st.sidebar.title("⚡ Test Execution Mode")
+mode = st.sidebar.radio("Choose mode:", ["Demo (offline/mock)", "Live (real API)"])
+st.session_state['mode'] = 'demo' if mode.startswith("Demo") else 'live'
+st.sidebar.text_input("LLM Endpoint/Model", key="llm_endpoint", value="https://api.openai.com/v1/chat/completions")
 
-# === 5. RUN TESTS ===
-def run_tests(plugins_to_run, scenarios_to_run, mode, api_endpoint="", api_key=""):
-    results = []
-    for sidx in scenarios_to_run:
-        scenario = all_scenarios[sidx]
-        result_obj = {"scenario": scenario, "results": []}
-        for plugin_name in plugins_to_run:
-            plugin = plugins[plugin_name]
-            try:
-                if mode == "Live/API":
-                    res = plugin.run_api(scenario, api_endpoint, api_key)
-                else:
-                    res = plugin.run(scenario)
-                result_obj["results"].append({"plugin": plugin_name, "result": res})
-            except Exception as e:
-                result_obj["results"].append({"plugin": plugin_name, "result": {
-                    "risk_level": "Unknown", "issue": f"Plugin error: {e}", "recommendation": "Check plugin"
-                }})
-        results.append(result_obj)
-    return results
+# --- Load Scenarios ---
+st.markdown("# 🧪 Load Test Scenarios")
 
-if run_all:
-    results = run_tests(plugin_list, list(range(len(all_scenarios))), mode, api_endpoint, api_key)
-    st.session_state["results"] = results
-    st.success("All tests complete!")
-elif run_selected:
-    if selected_plugins and selected_scenarios_idx:
-        results = run_tests(selected_plugins, selected_scenarios_idx, mode, api_endpoint, api_key)
-        st.session_state["results"] = results
-        st.success("Selected tests complete!")
+scenario_folder = os.path.join(os.path.dirname(__file__), "../scenarios")
+available_scenarios = [f for f in os.listdir(scenario_folder) if f.endswith(".json")]
+scenario_choice = st.selectbox("Select scenario(s) from built-in library:", ["Choose options"] + available_scenarios, key="scenario_choice")
+uploaded_files = st.file_uploader("Or upload custom scenario JSON(s)", accept_multiple_files=True, type=["json"])
+
+scenario_data = []
+if scenario_choice and scenario_choice != "Choose options":
+    path = os.path.join(scenario_folder, scenario_choice)
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+        scenario_data.append({"name": scenario_choice, "content": data})
+if uploaded_files:
+    for up in uploaded_files:
+        data = json.load(up)
+        scenario_data.append({"name": up.name, "content": data})
+
+if not scenario_data:
+    st.info("No valid scenarios loaded yet.")
+else:
+    st.success(f"Loaded {len(scenario_data)} scenario(s) for testing.")
+
+# --- Plugin Loader ---
+st.markdown("## 🧰 Select Attack/Testing Plugins")
+plugins = load_plugins()
+plugin_names = list(plugins.keys())
+default_plugins = plugin_names
+
+selected_plugins = st.multiselect(
+    "Select plugins/tools to run (all by default):",
+    plugin_names,
+    default=default_plugins,
+    key="selected_plugins"
+)
+
+if not selected_plugins:
+    st.warning("Please select at least one plugin to run.")
+
+# --- Run Button ---
+if st.button("🚀 Run selected test(s) on selected scenario(s)"):
+    if not scenario_data or not selected_plugins:
+        st.error("You must load at least one scenario and select one plugin.")
     else:
-        st.warning("Select at least one plugin and one scenario.")
+        results = []
+        for scenario in scenario_data:
+            for plugin_name in selected_plugins:
+                plugin = plugins[plugin_name]
+                try:
+                    output = plugin.run(scenario["content"], mode=st.session_state['mode'])
+                    results.append({
+                        "scenario": scenario["name"],
+                        "plugin": plugin_name,
+                        "result": output
+                    })
+                except Exception as e:
+                    results.append({
+                        "scenario": scenario["name"],
+                        "plugin": plugin_name,
+                        "result": f"Error: {e}"
+                    })
+        st.session_state["results"] = results
+        st.success("All tests complete!")
 
-# === 6. REPORTING SECTION ===
-if "results" in st.session_state:
+# --- Reporting & Export ---
+if "results" in st.session_state and st.session_state["results"]:
     st.header("📊 View/Export Report")
+    # JSON Report
     st.download_button(
         "⬇️ Download JSON Report",
-        data=json.dumps(st.session_state["]()_
+        data=json.dumps(st.session_state["results"], indent=2),
+        file_name="results.json",
+        mime="application/json"
+    )
+    # PDF Report
+    pdf_buf = create_pdf_report(st.session_state["results"])
+    st.download_button(
+        "⬇️ Download PDF Report",
+        data=pdf_buf,
+        file_name="AI_Test_Report.pdf",
+        mime="application/pdf"
+    )
+    # Show some quick result stats if you like
+    st.write("### Test Results Overview")
+    st.json(st.session_state["results"])
+
+st.markdown("---")
+st.caption("AI Test Suite v2 by AK-LLM | Red Team Max Edition")
+
