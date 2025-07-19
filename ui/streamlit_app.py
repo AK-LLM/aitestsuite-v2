@@ -1,53 +1,89 @@
 import streamlit as st
+import os
+import json
 from core.api_client import APIClient, load_config
-from core.security import classic_prompt_injection_test, role_confusion_test
-from core.robustness import robustness_suite
-from core.context import context_switch_scenario
-from core.bias import stereotype_test, cross_demographic_fairness_test
-from core.reporting import save_html, save_pdf
+from core.plugin_loader import discover_plugins
 from core.scenario_loader import load_scenarios
+from core.reporting import generate_report, save_html
+import yaml
 
 st.set_page_config(page_title="AI Test Suite v2", layout="wide")
-st.title("🛡️ AI Test Suite v2 (Production)")
+st.title("🛡️ AI Test Suite v2 (Red Team Max)")
 
 config = load_config()
-api_client = APIClient(config)
-
 mode = st.sidebar.radio("Mode", ["demo", "live"])
 config["mode"] = mode
 
-scenario_file = st.sidebar.selectbox(
-    "Scenario File",
-    ["sample_scenarios.json", "prompt_injection.json", "context_shift.json"]
-)
-scenarios = load_scenarios(f"scenarios/{scenario_file}")
+# Endpoint/model selector
+endpoint = st.sidebar.text_input("LLM Endpoint/Model", config.get("api_endpoint", ""))
+if endpoint:
+    config["api_endpoint"] = endpoint
 
-for idx, scenario in enumerate(scenarios):
-    st.markdown(f"### Test {idx+1}: {scenario['name']}")
-    if scenario.get("type") == "security":
-        result = classic_prompt_injection_test(scenario["prompt"], api_client)
-        st.json(result)
-    elif scenario.get("type") == "robustness":
-        result = robustness_suite(scenario["prompt"], api_client)
-        st.json(result)
-    elif scenario.get("type") == "context":
-        result = context_switch_scenario(scenario, api_client)
-        st.json(result)
-    elif scenario.get("type") == "bias":
-        result = stereotype_test(scenario["prompt"], api_client)
-        st.json(result)
-    elif scenario.get("type") == "cross_demographic":
-        groups = scenario.get("groups", ["men", "women", "children"])
-        result = cross_demographic_fairness_test(scenario["prompt"], groups, api_client)
-        st.json(result)
-    else:
-        st.warning("Unknown scenario type.")
-        continue
+api_client = APIClient(config)
+plugins = discover_plugins()
 
-    col1, col2 = st.columns(2)
-    if col1.button(f"Export as HTML (Test {idx+1})"):
-        save_html(result, f"reports/report_{idx+1}.html")
-        st.success(f"Saved to reports/report_{idx+1}.html")
-    if col2.button(f"Export as PDF (Test {idx+1})"):
-        save_pdf(result, f"reports/report_{idx+1}.pdf")
-        st.success(f"Saved to reports/report_{idx+1}.pdf")
+# SCENARIO SOURCE
+scenario_source = st.radio("Test Source", ["Prebuilt", "Manual"])
+if scenario_source == "Prebuilt":
+    scenario_files = [f for f in os.listdir("scenarios") if f.endswith(".json")]
+    file = st.selectbox("Scenario file", scenario_files)
+    if st.button("Load Scenarios"):
+        try:
+            scenarios = load_scenarios(os.path.join("scenarios", file))
+            st.success(f"Loaded {len(scenarios)} scenarios.")
+        except Exception as e:
+            st.error(f"Error loading scenario file: {e}")
+        if "scenarios" in locals():
+            for idx, scenario in enumerate(scenarios):
+                st.markdown(f"#### Test {idx+1}: {scenario['name']}")
+                # Find matching plugin
+                ptype = scenario.get("type", "uncategorized")
+                plugin = next((p for p in plugins if p["category"].lower() in ptype.lower()), None)
+                if plugin:
+                    if st.button(f"Run {scenario['name']}"):
+                        result = plugin["module"].run(scenario, api_client, endpoint)
+                        st.json(result)
+                        html_report = generate_report([{
+                            "scenario": scenario,
+                            "plugin": plugin["name"],
+                            "result": result,
+                            "risk": plugin["risk"],
+                            "references": plugin["references"]
+                        }])
+                        if st.button(f"Export {scenario['name']} Report"):
+                            save_html(html_report, f"reports/{scenario['name']}.html")
+                            st.success(f"Saved to reports/{scenario['name']}.html")
+                else:
+                    st.warning(f"No plug-in found for type '{ptype}'")
+else:
+    st.info("Paste single scenario (JSON/YAML, single or multi-turn, must have `prompt` or `steps` field).")
+    manual = st.text_area("Manual scenario")
+    if st.button("Validate & Run Manual Scenario"):
+        try:
+            if manual.strip().startswith("{"):
+                scenario = json.loads(manual)
+            else:
+                scenario = yaml.safe_load(manual)
+            st.success("Scenario valid.")
+            ptype = scenario.get("type", "uncategorized")
+            plugin = next((p for p in plugins if p["category"].lower() in ptype.lower()), None)
+            if plugin:
+                result = plugin["module"].run(scenario, api_client, endpoint)
+                st.json(result)
+                html_report = generate_report([{
+                    "scenario": scenario,
+                    "plugin": plugin["name"],
+                    "result": result,
+                    "risk": plugin["risk"],
+                    "references": plugin["references"]
+                }])
+                if st.button("Export Manual Scenario Report"):
+                    save_html(html_report, "reports/manual_scenario.html")
+                    st.success("Saved to reports/manual_scenario.html")
+            else:
+                st.warning(f"No plug-in found for type '{ptype}'")
+        except Exception as e:
+            st.error(f"Manual scenario invalid: {e}")
+
+st.markdown("---")
+st.markdown("**All results and reports will be saved in the `/reports/` folder for sharing, compliance, or further analysis.**")
